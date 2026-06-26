@@ -209,16 +209,52 @@ async def startup():
 async def root():
     return {"status": "online", "version": "9.0", "engine": "SerpAPI + Supabase"}
 
+async def serpapi_get_quota() -> dict:
+    """Lấy số lần tìm kiếm còn lại từ SerpAPI account"""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://serpapi.com/account",
+                params={"api_key": SERPAPI_KEY}
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                total = data.get("plan_searches_left", None)
+                used = data.get("total_searches_done", None)
+                plan_total = data.get("plan_monthly_searches", 250)
+                return {
+                    "remaining": total,
+                    "used": used,
+                    "total": plan_total,
+                    "account_email": data.get("email", "")
+                }
+    except Exception as e:
+        print(f"Quota check error: {e}")
+    return {"remaining": None, "used": None, "total": 250, "account_email": ""}
+
 @app.get("/health")
 async def health():
     seen_count = len(await supabase_get_seen()) if SUPABASE_URL else 0
+    quota = await serpapi_get_quota()
     return {
         "status": "ok",
         "serpapi_configured": bool(SERPAPI_KEY),
         "supabase_configured": bool(SUPABASE_URL),
         "seen_domains_count": seen_count,
-        "engine": "SerpAPI + Supabase"
+        "engine": "SerpAPI + Supabase",
+        "serpapi_remaining": quota["remaining"],
+        "serpapi_used": quota["used"],
+        "serpapi_total": quota["total"],
+        "serpapi_email": quota["account_email"]
     }
+
+@app.get("/quota")
+async def get_quota():
+    """Endpoint riêng để check quota nhanh"""
+    if not SERPAPI_KEY:
+        return {"error": "Chưa có SERPAPI_KEY"}
+    quota = await serpapi_get_quota()
+    return quota
 
 @app.post("/reset-seen")
 async def reset_seen():
