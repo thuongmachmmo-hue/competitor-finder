@@ -112,12 +112,33 @@ async def serpapi_get(params: dict) -> dict:
         resp = await client.get("https://serpapi.com/search", params={**params, "api_key": SERPAPI_KEY})
         return resp.json()
 
-def make_result(domain, title, desc, displayed, landing, sitelinks, extensions, source, has_ads, query, country):
+AFFILIATE_PATHS = ["/affiliates", "/affiliate", "/partners", "/partner", "/referral", "/refer", "/ambassador", "/reseller", "/join", "/earn"]
+AFFILIATE_KEYWORDS = ["affiliate program", "partner program", "referral program", "earn commission", "become an affiliate", "join our affiliate"]
+
+async def check_affiliate(domain: str) -> bool:
+    """Check nhanh xem domain có affiliate program không"""
+    try:
+        async with httpx.AsyncClient(timeout=6, follow_redirects=True) as client:
+            for path in AFFILIATE_PATHS[:4]:
+                try:
+                    r = await client.get(f"https://{domain}{path}", headers={"User-Agent": "Mozilla/5.0"})
+                    if r.status_code == 200:
+                        text_lower = r.text.lower()
+                        if any(kw in text_lower for kw in ["affiliate", "commission", "referral", "partner program", "earn"]):
+                            return True
+                except:
+                    continue
+    except:
+        pass
+    return False
+
+def make_result(domain, title, desc, displayed, landing, sitelinks, extensions, source, has_ads, query, country, has_affiliate=False):
     return {
         "domain": domain, "title": title, "description": desc,
         "displayed_url": displayed, "landing_page": landing,
         "sitelinks": sitelinks[:4], "extensions": extensions[:3],
         "source": source, "has_ads": has_ads, "query": query, "country": country,
+        "has_affiliate": has_affiliate,
         "semrush_url": f"https://www.semrush.com/analytics/overview/?q={domain}",
         "ads_spy_url": f"https://adstransparency.google.com/?query={domain}",
         "similarweb_url": f"https://www.similarweb.com/website/{domain}",
@@ -126,7 +147,7 @@ def make_result(domain, title, desc, displayed, landing, sitelinks, extensions, 
 async def search_one_country(keyword: str, country: str, seen: set, limit: int = 20):
     results = []
     new_domains = []
-    queries = [keyword, f"best {keyword}", f"{keyword} service", f"{keyword} near me", f"top {keyword}", f"buy {keyword}"]
+    queries = [keyword, f"best {keyword}", f"{keyword} service", f"{keyword} near me", f"top {keyword}", f"buy {keyword}", f"{keyword} affiliate program", f"{keyword} partner program"]
 
     for q in queries:
         if len(results) >= limit:
@@ -153,6 +174,19 @@ async def search_one_country(keyword: str, country: str, seen: set, limit: int =
     # Lưu domain mới vào Supabase
     if new_domains and SUPABASE_URL:
         await supabase_add_domains(new_domains)
+
+    # Check affiliate cho các domain có Ads (ưu tiên) — check tối đa 10 domain
+    aff_tasks = []
+    aff_indices = []
+    for i, r in enumerate(results[:15]):
+        if r["has_ads"]:
+            aff_tasks.append(check_affiliate(r["domain"]))
+            aff_indices.append(i)
+    if aff_tasks:
+        aff_results = await asyncio.gather(*aff_tasks, return_exceptions=True)
+        for idx, aff in zip(aff_indices, aff_results):
+            if aff is True:
+                results[idx]["has_affiliate"] = True
 
     return results
 
